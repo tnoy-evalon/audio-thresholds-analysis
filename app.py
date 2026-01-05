@@ -227,7 +227,7 @@ def render_column_histogram(col_name: str, col_data: pd.Series) -> float:
         bargap=0.1,
     )
     fig.update_traces(marker_color='#6C8EBF')
-    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
     
     # Min/Max/Avg stats
     st.caption(
@@ -346,7 +346,7 @@ def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, fa
         yaxis=dict(visible=False),
         bargap=0.1,
     )
-    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
     
     st.caption("🟩 True (same speaker) · 🟥 False (different speaker)")
     
@@ -449,7 +449,7 @@ def render_data_preview(df: pd.DataFrame, display_cols: list[str], numeric_cols:
         styled_df = preview_df.style.apply(highlight_rejected, axis=1)
         st.dataframe(
             styled_df,
-            width='stretch',
+            use_container_width=True,
             selection_mode="single-row",
             on_select="rerun",
             key="data_preview_table"
@@ -457,7 +457,7 @@ def render_data_preview(df: pd.DataFrame, display_cols: list[str], numeric_cols:
     else:
         st.dataframe(
             preview_df,
-            width='stretch',
+            use_container_width=True,
             selection_mode="single-row",
             on_select="rerun",
             key="data_preview_table"
