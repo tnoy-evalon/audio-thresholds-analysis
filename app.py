@@ -4,17 +4,19 @@ A web-based GUI for analyzing dataframe data.
 """
 
 import io
+from pathlib import Path
+
 import numpy as np
-import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import soundfile as sf
-from pathlib import Path
+import streamlit as st
 
+from utils.asv import asv_metrics, compute_asv
 from utils.load_waveform import load_waveform
-from utils.asv import compute_asv, asv_metrics
 from utils.s3_utils import S3Path, read_s3_bytes_with_retry
+
 
 # =============================================================================
 # Configuration
@@ -152,10 +154,21 @@ def render_sidebar():
     with st.sidebar:
         st.header("Data Source")
         
+        # File upload (drag-drop or browse)
+        st.file_uploader(
+            "Upload a file",
+            type=["parquet", "csv", "pkl"],
+            help="Drag and drop or browse for a .parquet, .csv, or .pkl file",
+            key="_uploaded_file",
+        )
+        
+        st.divider()
+        st.caption("Or load from path:")
+        
         st.text_input(
             "File path",
             value="s3://asv-data/analysis/predictions.pkl",
-            help="Path to a local .parquet, .csv, or .pkl file",
+            help="Path to a local or S3 .parquet, .csv, or .pkl file",
             key="_file_path",
         )
         st.button("Load File", key="_load_local")
