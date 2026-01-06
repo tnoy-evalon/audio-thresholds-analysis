@@ -4,6 +4,7 @@ A web-based GUI for analyzing dataframe data.
 """
 
 import io
+import os
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,12 @@ from utils.asv import asv_metrics, compute_asv
 from utils.load_waveform import load_waveform
 from utils.s3_utils import S3Path, read_s3_bytes_with_retry
 
+# Load AWS credentials from Streamlit secrets (for cloud deployment)
+if hasattr(st, "secrets") and "AWS_ACCESS_KEY_ID" in st.secrets:
+    
+    os.environ["AWS_ACCESS_KEY_ID"] = st.secrets["AWS_ACCESS_KEY_ID"]
+    os.environ["AWS_SECRET_ACCESS_KEY"] = st.secrets["AWS_SECRET_ACCESS_KEY"]
+    os.environ["AWS_DEFAULT_REGION"] = st.secrets.get("AWS_DEFAULT_REGION", "us-east-1")
 
 # =============================================================================
 # Configuration
