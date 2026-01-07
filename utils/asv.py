@@ -4,9 +4,15 @@ import random
 from .similarity import compute_similarity
 from .reference_samples import get_reference_samples_per_user
 
-def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame, method: str = "mean") -> dict[str, float]:
+def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame, method: str = "mean") -> dict:
     """
     Compute the ASV score for a test row and a set of reference rows.
+    
+    Returns a dict with:
+        - Aggregated similarity per model (e.g., 'WavLM': 0.85)
+        - 'combined_models': mean of all model similarities (if multiple models)
+        - 'reference_session_ids': list of session_ids used as references
+        - 'reference_similarities': dict mapping model_name -> list of individual similarities
     """
     # if the tested row appears in the reference rows, remove it from the reference rows
     if test_row["session_id"] in reference_rows["session_id"].values:
@@ -17,6 +23,9 @@ def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame,
     model_names = [e.removeprefix("emb_") for e in emb_columns]
 
     ret = {}
+    reference_similarities = {}
+    reference_session_ids = reference_rows["session_id"].tolist()
+    
     for i, emb_column in enumerate(emb_columns):
         model_similarities = []
 
@@ -24,23 +33,30 @@ def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame,
             similarity = compute_similarity(test_row[emb_column], r[emb_column])
             model_similarities.append(similarity)
 
+        reference_similarities[model_names[i]] = model_similarities
+
         if method == "mean":
-            ret[model_names[i]] = np.mean(model_similarities)
+            ret[model_names[i]] = np.mean(model_similarities) if model_similarities else 0.0
         elif method == "max":
-            ret[model_names[i]] = np.max(model_similarities)
+            ret[model_names[i]] = np.max(model_similarities) if model_similarities else 0.0
         elif method == "min":
-            ret[model_names[i]] = np.min(model_similarities)
+            ret[model_names[i]] = np.min(model_similarities) if model_similarities else 0.0
         elif method == "median":
-            ret[model_names[i]] = np.median(model_similarities)
+            ret[model_names[i]] = np.median(model_similarities) if model_similarities else 0.0
         else:
             raise ValueError(f"Invalid method: {method}")
-        
-        if len(model_names) > 1:
-            ret['combined_models'] = np.mean(list(ret.values()))
+
+    # Add combined_models after all model scores are computed
+    if len(model_names) > 1:
+        model_scores = [ret[m] for m in model_names]
+        ret['combined_models'] = np.mean(model_scores)
+
+    ret['reference_session_ids'] = reference_session_ids
+    ret['reference_similarities'] = reference_similarities
 
     return ret
 
-def compute_asv(df: pd.DataFrame, method: str = "mean", max_samples: int = 3) -> pd.DataFrame:
+def compute_asv(df: pd.DataFrame, method: str = "mean", max_samples: int = 3) -> tuple[pd.DataFrame, pd.DataFrame]:
     reference_samples = get_reference_samples_per_user(df, max_samples=max_samples)
     
     # Collect results in lists first, then create DataFrames at once (avoids FutureWarning)

@@ -383,14 +383,18 @@ def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, fa
 
 
 def render_speaker_verification(df: pd.DataFrame, asv_placeholder=None):
-    """Render the speaker verification section."""
+    """Render the speaker verification section.
+    
+    Returns:
+        tuple: (true_asv, false_asv) DataFrames, or (None, None) if no results
+    """
     st.subheader("Speaker Verification")
     
     # Check if we have embedding columns
     emb_columns = [col for col in df.columns if col.startswith("emb_")]
     if not emb_columns:
         st.warning("No embedding columns (emb_*) found in data")
-        return
+        return None, None
     
     # Configuration inputs
     col1, col2 = st.columns(2)
@@ -418,10 +422,11 @@ def render_speaker_verification(df: pd.DataFrame, asv_placeholder=None):
     
     if true_asv.empty:
         st.warning("No ASV results computed")
-        return
+        return None, None
     
-    # Display histograms for each model (combined_models first if it exists)
-    model_names = true_asv.columns.tolist()
+    # Display histograms for each model (exclude metadata columns, combined_models first)
+    metadata_cols = ['reference_session_ids', 'reference_similarities']
+    model_names = [c for c in true_asv.columns if c not in metadata_cols]
     if 'combined_models' in model_names:
         model_names.remove('combined_models')
         model_names.insert(0, 'combined_models')
@@ -438,6 +443,168 @@ def render_speaker_verification(df: pd.DataFrame, asv_placeholder=None):
         threshold = st.session_state.get(f"asv_threshold_{primary_model}", DEFAULT_ASV_THRESHOLDS.get(primary_model, 0.5))
         metrics = asv_metrics(true_asv[primary_model], false_asv[primary_model], threshold)
         asv_placeholder.metric("ASV Accuracy", f"{metrics['accuracy']:.1%}")
+    
+    return true_asv, false_asv
+
+
+def render_worst_results(true_asv: pd.DataFrame, false_asv: pd.DataFrame, df: pd.DataFrame):
+    """Render worst results section showing lowest true similarities and highest false similarities."""
+    st.subheader("Worst Results Inspection")
+    st.caption("Inspect the worst performing cases: lowest true similarities (false negatives) and highest false similarities (false positives)")
+    
+    if true_asv is None or true_asv.empty:
+        return
+    
+    # Get model names (exclude metadata columns)
+    metadata_cols = ['reference_session_ids', 'reference_similarities']
+    model_names = [c for c in true_asv.columns if c not in metadata_cols]
+    if 'combined_models' in model_names:
+        model_names.remove('combined_models')
+        model_names.insert(0, 'combined_models')
+    
+    # Select which model to display (default to WESpeakerONNX if available)
+    if len(model_names) > 1:
+        default_idx = model_names.index('WESpeakerONNX') if 'WESpeakerONNX' in model_names else 0
+        model_name = st.selectbox(
+            "Select model for inspection",
+            options=model_names,
+            index=default_idx,
+            key="worst_results_model"
+        )
+    else:
+        model_name = model_names[0]
+    
+    # Get threshold for selected model
+    threshold = st.session_state.get(f"asv_threshold_{model_name}", DEFAULT_ASV_THRESHOLDS.get(model_name, 0.5))
+    
+    # Sort indices for both tables
+    worst_true_indices = true_asv[model_name].sort_values(ascending=True).index.tolist()
+    worst_false_indices = false_asv[model_name].sort_values(ascending=False).index.tolist()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Worst True Matches (False Negatives)**")
+        st.caption("Lowest similarity scores - same speaker pairs with low confidence. 🔴 = below threshold")
+        
+        # Build display dataframe with only key columns
+        rows = []
+        for idx in worst_true_indices:
+            sim = true_asv.loc[idx, model_name]
+            row_data = {
+                '': '🔴' if sim < threshold else '',
+                'similarity': sim,
+                'ref_similarities': true_asv.loc[idx, 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
+                'id': df.loc[idx, 'session_id'] if 'session_id' in df.columns else idx,
+                'reference_ids': true_asv.loc[idx, 'reference_session_ids'],
+            }
+            rows.append(row_data)
+        
+        worst_true_display = pd.DataFrame(rows, index=worst_true_indices)
+        
+        event_true = st.dataframe(
+            worst_true_display,
+            use_container_width=True,
+            height=200,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="worst_true_table"
+        )
+    
+    with col2:
+        st.markdown("**Worst False Matches (False Positives)**")
+        st.caption("Highest similarity scores - different speaker pairs with high confidence. 🔴 = above threshold")
+        
+        # Build display dataframe with only key columns
+        rows = []
+        for idx in worst_false_indices:
+            sim = false_asv.loc[idx, model_name]
+            row_data = {
+                '': '🔴' if sim > threshold else '',
+                'similarity': sim,
+                'ref_similarities': false_asv.loc[idx, 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
+                'id': df.loc[idx, 'session_id'] if 'session_id' in df.columns else idx,
+                'reference_ids': false_asv.loc[idx, 'reference_session_ids'],
+            }
+            rows.append(row_data)
+        
+        worst_false_display = pd.DataFrame(rows, index=worst_false_indices)
+        
+        event_false = st.dataframe(
+            worst_false_display,
+            use_container_width=True,
+            height=200,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="worst_false_table"
+        )
+    
+    # Audio playback section
+    if 'file_path' not in df.columns:
+        return
+    
+    # Get selected row indices
+    selected_true_rows = event_true.selection.rows if event_true.selection.rows else [0]
+    selected_false_rows = event_false.selection.rows if event_false.selection.rows else [0]
+    selected_true_idx = selected_true_rows[0]
+    selected_false_idx = selected_false_rows[0]
+    
+    st.markdown("---")
+    audio_col1, audio_col2 = st.columns(2)
+    
+    with audio_col1:
+        _render_worst_result_audio(
+            df, 
+            worst_true_indices[selected_true_idx], 
+            true_asv.loc[worst_true_indices[selected_true_idx], 'reference_session_ids'],
+            true_asv.loc[worst_true_indices[selected_true_idx], 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
+            "true"
+        )
+    
+    with audio_col2:
+        _render_worst_result_audio(
+            df, 
+            worst_false_indices[selected_false_idx], 
+            false_asv.loc[worst_false_indices[selected_false_idx], 'reference_session_ids'],
+            false_asv.loc[worst_false_indices[selected_false_idx], 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
+            "false"
+        )
+
+
+def _render_worst_result_audio(df: pd.DataFrame, test_idx, reference_ids: list, ref_similarities: list, prefix: str):
+    """Render compact audio players for test sample and its references."""
+    # Test sample
+    test_row = df.loc[test_idx]
+    test_file_path = test_row['file_path']
+    test_session_id = test_row['session_id'] if 'session_id' in df.columns else test_idx
+    
+    st.markdown(f"**Test Sample:** `{test_session_id}`")
+    try:
+        test_audio = prepare_audio_data(test_file_path)
+        st.audio(test_audio["original_bytes"], format="audio/wav")
+    except Exception as e:
+        st.error(f"Error loading audio: {e}")
+    
+    # Reference samples
+    if reference_ids:
+        st.markdown("**References:**")
+        for i, ref_id in enumerate(reference_ids):
+            # Find the reference row by session_id
+            ref_rows = df[df['session_id'] == ref_id]
+            if ref_rows.empty:
+                st.caption(f"Reference {ref_id} not found in data")
+                continue
+            
+            ref_row = ref_rows.iloc[0]
+            ref_file_path = ref_row['file_path']
+            
+            sim_str = f" (sim={float(ref_similarities[i]):.3f})" if i < len(ref_similarities) else ""
+            st.caption(f"`{ref_id}`{sim_str}")
+            try:
+                ref_audio = prepare_audio_data(ref_file_path)
+                st.audio(ref_audio["original_bytes"], format="audio/wav")
+            except Exception as e:
+                st.error(f"Error loading reference audio: {e}")
 
 
 def render_data_preview(df: pd.DataFrame, display_cols: list[str], numeric_cols: list[str], thresholds: dict[str, float]):
@@ -445,11 +612,11 @@ def render_data_preview(df: pd.DataFrame, display_cols: list[str], numeric_cols:
     st.subheader("Data Preview")
     st.caption("Click on a row to select it for audio playback")
     
-    preview_df = df[display_cols].head(100)
+    preview_df = df[display_cols]
     
     if thresholds:
         # Calculate which rows pass thresholds
-        passing_mask = calculate_passing_mask(df.head(100), numeric_cols, thresholds)
+        passing_mask = calculate_passing_mask(df, numeric_cols, thresholds)
         
         # Style function to highlight rejected rows
         def highlight_rejected(row):
@@ -682,7 +849,12 @@ def main():
     st.divider()
     
     # Speaker verification (uses filtered data)
-    render_speaker_verification(filtered_df, asv_placeholder)
+    true_asv, false_asv = render_speaker_verification(filtered_df, asv_placeholder)
+    
+    # Worst results inspection
+    if true_asv is not None and not true_asv.empty:
+        st.divider()
+        render_worst_results(true_asv, false_asv, filtered_df)
     
     st.divider()
     
