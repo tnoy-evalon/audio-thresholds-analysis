@@ -14,9 +14,14 @@ import plotly.graph_objects as go
 import soundfile as sf
 import streamlit as st
 
+from config import DEFAULT_ASV_THRESHOLDS, DEFAULT_THRESHOLDS
 from utils.asv import asv_metrics, compute_asv
 from utils.load_waveform import load_waveform
 from utils.s3_utils import S3Path, read_s3_bytes_with_retry
+
+# os.environ.pop("AWS_ACCESS_KEY_ID", None)
+# os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+# os.environ.pop("AWS_DEFAULT_REGION", None)
 
 # Load AWS credentials from Streamlit secrets (for cloud deployment)
 if hasattr(st, "secrets") and "AWS_ACCESS_KEY_ID" in st.secrets:
@@ -42,23 +47,6 @@ DISPLAY_COLUMNS = [
     'vad_ratio', 'snr',
     'squim_STOI', 'squim_PESQ', 'squim_SI-SDR'
 ]
-
-# Default threshold values for numeric columns
-DEFAULT_THRESHOLDS = {
-    'vad_ratio': 0.2,
-    'snr': 0.0,
-    'squim_STOI': 0.6,
-    'squim_PESQ': 1.5,
-    'squim_SI-SDR': 0.0,
-}
-
-# Default threshold values for ASV models
-DEFAULT_ASV_THRESHOLDS = {
-    'WESpeakerONNX': 0.35,
-    'WavLM': 0.90,
-    'Titanet': 0.4,
-    'combined_models': 0.5,
-}
 
 
 # =============================================================================
@@ -130,23 +118,31 @@ def get_dataframe() -> pd.DataFrame | None:
     # Check for uploaded file
     uploaded_file = st.session_state.get("_uploaded_file")
     if uploaded_file is not None:
-        try:
-            df = load_data_from_upload(uploaded_file)
-            st.session_state["df"] = df
-            st.sidebar.success(f"Loaded: {uploaded_file.name}")
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-        return df
+        # Only reload if it's a different file
+        if st.session_state.get("_loaded_source") != uploaded_file.name:
+            try:
+                df = load_data_from_upload(uploaded_file)
+                st.session_state["df"] = df
+                st.session_state["_loaded_source"] = uploaded_file.name
+                st.cache_data.clear()  # Clear cached computations for new data
+                st.sidebar.success(f"Loaded: {uploaded_file.name}")
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
+                return st.session_state.get("df")
+        return st.session_state.get("df")
     
     # Check for local file load request
-    if st.session_state.get("_load_local") and st.session_state.get("_file_path"):
+    file_path = st.session_state.get("_file_path")
+    if st.session_state.get("_load_local") and file_path:
         try:
-            df = load_data_from_path(st.session_state["_file_path"])
+            df = load_data_from_path(file_path)
             st.session_state["df"] = df
-            st.sidebar.success(f"Loaded: {st.session_state['_file_path']}")
+            st.session_state["_loaded_source"] = file_path
+            st.cache_data.clear()  # Clear cached computations for new data
+            st.sidebar.success(f"Loaded: {file_path}")
         except Exception as e:
             st.error(f"Error loading file: {e}")
-        return df
+        return df if df is not None else st.session_state.get("df")
     
     # Fall back to session state
     return st.session_state.get("df")
@@ -172,13 +168,14 @@ def render_sidebar():
         st.divider()
         st.caption("Or load from path:")
         
-        st.text_input(
-            "File path",
-            value="s3://asv-data/analysis/predictions.pkl",
-            help="Path to a local or S3 .parquet, .csv, or .pkl file",
-            key="_file_path",
-        )
-        st.button("Load File", key="_load_local")
+        with st.form("load_file_form"):
+            st.text_input(
+                "File path",
+                value="s3://asv-data/analysis/predictions.pkl",
+                help="Path to a local or S3 .parquet, .csv, or .pkl file",
+                key="_file_path",
+            )
+            st.form_submit_button("Load File", key="_load_local")
 
 
 def render_metrics(df: pd.DataFrame, yield_placeholder):
@@ -218,7 +215,9 @@ def render_column_histogram(col_name: str, col_data: pd.Series) -> float:
     )
     
     # Compact histogram with threshold line
-    fig = px.histogram(clean_data, nbins=10)
+    bin_size = (clean_data.max() - clean_data.min()) / 10
+    fig = px.histogram(clean_data)
+    fig.update_traces(xbins=dict(start=clean_data.min(), end=clean_data.max(), size=bin_size))
     fig.add_vline(
         x=current_threshold,
         line_color="red",
@@ -324,17 +323,23 @@ def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, fa
     # Header
     st.markdown(f"**{model_name}**")
     
+    # Calculate bin boundaries with fixed [0, 1] range
+    true_clean = true_similarities.dropna()
+    false_clean = false_similarities.dropna()
+    num_bins = 100
+    bin_size = 1.0 / num_bins
+    
     # Overlaid histograms: true (green) and false (red)
     fig = go.Figure()
     fig.add_trace(go.Histogram(
-        x=true_similarities.dropna(),
-        nbinsx=20,
+        x=true_clean,
+        xbins=dict(start=0.0, end=1.0, size=bin_size),
         name="True (same speaker)",
         marker_color="rgba(100, 200, 100, 0.6)",
     ))
     fig.add_trace(go.Histogram(
-        x=false_similarities.dropna(),
-        nbinsx=20,
+        x=false_clean,
+        xbins=dict(start=0.0, end=1.0, size=bin_size),
         name="False (different speaker)",
         marker_color="rgba(200, 100, 100, 0.6)",
     ))
@@ -349,7 +354,7 @@ def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, fa
         showlegend=False,
         height=120,
         margin=dict(l=0, r=0, t=0, b=0),
-        xaxis=dict(visible=True, title=None),
+        xaxis=dict(visible=True, title=None, range=[0, 1]),
         yaxis=dict(visible=False),
         bargap=0.1,
     )
@@ -371,7 +376,7 @@ def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, fa
     metrics = asv_metrics(true_similarities, false_similarities, threshold)
     
     # Display key metrics
-    st.markdown(f"**Accuracy:** {metrics['accuracy']:.1%}")
+    st.markdown(f"**Accuracy:** {metrics['accuracy']:.1%} · **False Negatives:** {metrics['fnr']:.1%}")
     st.caption(f"Precision: {metrics['precision']:.1%} · Recall: {metrics['recall']:.1%} · F1: {metrics['f1_score']:.1%}")
     
     return threshold

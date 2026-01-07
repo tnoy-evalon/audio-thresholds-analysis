@@ -71,17 +71,19 @@ def asv_metrics(true_preds: pd.Series | np.ndarray, false_preds: pd.Series | np.
     fp = np.count_nonzero(false_preds > threshold)
     fn = np.count_nonzero(true_preds <= threshold)
     tn = np.count_nonzero(false_preds <= threshold)
-    precision = tp / (tp + fp)
-    recall = tp / (tp + fn)
-    f1_score = 2 * precision * recall / (precision + recall)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
     ret = {
         "tp": tp,
         "fp": fp,
         "fn": fn,
         "tn": tn,
-        "accuracy": (tp + tn) / (tp + tn + fp + fn),
+        "accuracy": (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0,
         "precision": precision,
         "recall": recall,
         "f1_score": f1_score,
+        "fnr": fnr,
     }
     return ret
