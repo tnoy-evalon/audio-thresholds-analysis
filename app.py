@@ -46,7 +46,8 @@ DISPLAY_COLUMNS = [
     'created_at', 'session_id', 'user_id', 'text',
     'vad_ratio', 'snr',
     'squim_STOI', 'squim_PESQ', 'squim_SI-SDR',
-    'adfd_score'
+    'adfd_score',
+    'status_reason'
 ]
 
 
