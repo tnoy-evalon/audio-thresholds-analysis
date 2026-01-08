@@ -628,32 +628,39 @@ def render_worst_results(true_asv: pd.DataFrame, false_asv: pd.DataFrame, df: pd
     if 'file_path' not in df.columns:
         return
     
-    # Get selected row indices
-    selected_true_rows = event_true.selection.rows if event_true.selection.rows else [0]
-    selected_false_rows = event_false.selection.rows if event_false.selection.rows else [0]
-    selected_true_idx = selected_true_rows[0]
-    selected_false_idx = selected_false_rows[0]
+    # Get selected row indices - only proceed if rows are actually selected
+    selected_true_rows = event_true.selection.rows if event_true.selection.rows else []
+    selected_false_rows = event_false.selection.rows if event_false.selection.rows else []
+    
+    # Only render audio if at least one row is selected
+    if not selected_true_rows and not selected_false_rows:
+        return
+    
+    selected_true_idx = selected_true_rows[0] if selected_true_rows else None
+    selected_false_idx = selected_false_rows[0] if selected_false_rows else None
     
     st.markdown("---")
     audio_col1, audio_col2 = st.columns(2)
     
     with audio_col1:
-        _render_worst_result_audio(
-            df, 
-            worst_true_indices[selected_true_idx], 
-            true_asv.loc[worst_true_indices[selected_true_idx], 'reference_session_ids'],
-            true_asv.loc[worst_true_indices[selected_true_idx], 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
-            "true"
-        )
+        if selected_true_idx is not None:
+            _render_worst_result_audio(
+                df, 
+                worst_true_indices[selected_true_idx], 
+                true_asv.loc[worst_true_indices[selected_true_idx], 'reference_session_ids'],
+                true_asv.loc[worst_true_indices[selected_true_idx], 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
+                "true"
+            )
     
     with audio_col2:
-        _render_worst_result_audio(
-            df, 
-            worst_false_indices[selected_false_idx], 
-            false_asv.loc[worst_false_indices[selected_false_idx], 'reference_session_ids'],
-            false_asv.loc[worst_false_indices[selected_false_idx], 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
-            "false"
-        )
+        if selected_false_idx is not None:
+            _render_worst_result_audio(
+                df, 
+                worst_false_indices[selected_false_idx], 
+                false_asv.loc[worst_false_indices[selected_false_idx], 'reference_session_ids'],
+                false_asv.loc[worst_false_indices[selected_false_idx], 'reference_similarities'].get(model_name, []) if model_name != 'combined_models' else [],
+                "false"
+            )
 
 
 def _render_worst_result_audio(df: pd.DataFrame, test_idx, reference_ids: list, ref_similarities: list, prefix: str):

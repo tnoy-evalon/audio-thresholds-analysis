@@ -4,7 +4,7 @@ import random
 from .similarity import compute_similarity
 from .reference_samples import get_reference_samples_per_user
 
-def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame, method: str = "mean") -> dict:
+def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame, method: str = "mean", max_samples: int | None = None) -> dict:
     """
     Compute the ASV score for a test row and a set of reference rows.
     
@@ -17,6 +17,10 @@ def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame,
     # if the tested row appears in the reference rows, remove it from the reference rows
     if test_row["session_id"] in reference_rows["session_id"].values:
         reference_rows = reference_rows[reference_rows["session_id"] != test_row["session_id"]]
+    
+    # Limit the number of reference samples after filtering out the test row
+    if max_samples is not None and len(reference_rows) > max_samples:
+        reference_rows = reference_rows.head(max_samples)
 
     # compute the similarity between the test row and the reference rows
     emb_columns = [col for col in reference_rows.columns if col.startswith("emb_")]
@@ -57,13 +61,14 @@ def _compute_asv_similarities(test_row: pd.Series, reference_rows: pd.DataFrame,
     return ret
 
 def compute_asv(df: pd.DataFrame, method: str = "mean", max_samples: int = 3) -> tuple[pd.DataFrame, pd.DataFrame]:
-    reference_samples = get_reference_samples_per_user(df, max_samples=max_samples)
+    # Get all reference samples per user (without limiting) - we'll limit per item in the loop
+    reference_samples = get_reference_samples_per_user(df, max_samples=None)
     
     # Collect results in lists first, then create DataFrames at once (avoids FutureWarning)
     true_results = []
     true_indices = []
     for i, test_row in df.iterrows():
-        asv_similarities = _compute_asv_similarities(test_row, reference_samples[test_row["user_id"]], method)
+        asv_similarities = _compute_asv_similarities(test_row, reference_samples[test_row["user_id"]], method, max_samples=max_samples)
         true_results.append(asv_similarities)
         true_indices.append(i)
     
@@ -72,7 +77,7 @@ def compute_asv(df: pd.DataFrame, method: str = "mean", max_samples: int = 3) ->
     for i, test_row in df.iterrows():
         other_user_ids = [user_id for user_id in reference_samples.keys() if user_id != test_row["user_id"]]
         random_user_id = random.choice(other_user_ids)
-        asv_similarities = _compute_asv_similarities(test_row, reference_samples[random_user_id], method)
+        asv_similarities = _compute_asv_similarities(test_row, reference_samples[random_user_id], method, max_samples=max_samples)
         false_results.append(asv_similarities)
         false_indices.append(i)
 

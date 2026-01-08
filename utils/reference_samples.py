@@ -8,7 +8,7 @@ def get_reference_samples_per_user(
     # squim_pesq_threshold: float = 1.5,
     # squim_si_sdr_threshold: float = 0.0,
     # vad_ratio_threshold: float = 0.2,
-    max_samples: int = 3,
+    max_samples: int | None = 3,
 ) -> dict[str, pd.DataFrame]:
     """
     Get reference samples from the dataframe.
@@ -27,6 +27,10 @@ def get_reference_samples_per_user(
 
     # for each user, sort by snr, squim_stoi, squim_pesq, squim_si_sdr
     for user_id, user_df in g:
-        ret[user_id] = user_df.sort_values(by=["snr", "squim_STOI", "squim_PESQ", "squim_SI-SDR"], ascending=False).head(max_samples)
+        sorted_df = user_df.sort_values(by=["snr", "squim_STOI", "squim_PESQ", "squim_SI-SDR"], ascending=False)
+        if max_samples is not None:
+            ret[user_id] = sorted_df.head(max_samples)
+        else:
+            ret[user_id] = sorted_df
     
     return ret
