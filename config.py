@@ -9,6 +9,7 @@ DEFAULT_THRESHOLDS = {
     'squim_STOI': 0.6,
     'squim_PESQ': 1.5,
     'squim_SI-SDR': 0.0,
+    'adfd_score': 0.5,
 }
 
 # Default threshold values for ASV models

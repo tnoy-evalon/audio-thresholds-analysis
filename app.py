@@ -45,7 +45,8 @@ st.set_page_config(
 DISPLAY_COLUMNS = [
     'created_at', 'session_id', 'user_id', 'text',
     'vad_ratio', 'snr',
-    'squim_STOI', 'squim_PESQ', 'squim_SI-SDR'
+    'squim_STOI', 'squim_PESQ', 'squim_SI-SDR',
+    'adfd_score'
 ]
 
 
@@ -148,6 +149,67 @@ def get_dataframe() -> pd.DataFrame | None:
     return st.session_state.get("df")
 
 
+def load_adfd_predictions() -> pd.DataFrame | None:
+    """Load ADFD predictions from upload or local file."""
+    adfd_df = None
+    
+    # Check for uploaded ADFD file
+    uploaded_adfd = st.session_state.get("_adfd_uploaded_file")
+    if uploaded_adfd is not None:
+        if st.session_state.get("_adfd_loaded_source") != uploaded_adfd.name:
+            try:
+                adfd_df = load_data_from_upload(uploaded_adfd)
+                st.session_state["adfd_df"] = adfd_df
+                st.session_state["_adfd_loaded_source"] = uploaded_adfd.name
+                st.sidebar.success(f"Loaded ADFD: {uploaded_adfd.name}")
+            except Exception as e:
+                st.error(f"Error loading ADFD file: {e}")
+                return st.session_state.get("adfd_df")
+        return st.session_state.get("adfd_df")
+    
+    # Check for local ADFD file load request
+    adfd_path = st.session_state.get("_adfd_file_path")
+    if st.session_state.get("_load_adfd") and adfd_path:
+        try:
+            adfd_df = load_data_from_path(adfd_path)
+            st.session_state["adfd_df"] = adfd_df
+            st.session_state["_adfd_loaded_source"] = adfd_path
+            st.sidebar.success(f"Loaded ADFD: {adfd_path}")
+        except Exception as e:
+            st.error(f"Error loading ADFD file: {e}")
+        return adfd_df if adfd_df is not None else st.session_state.get("adfd_df")
+    
+    return st.session_state.get("adfd_df")
+
+
+def merge_adfd_predictions(df: pd.DataFrame, adfd_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge ADFD predictions into main dataframe based on file_path.
+    
+    Args:
+        df: Main dataframe with 'file_path' column
+        adfd_df: ADFD predictions dataframe with 'file_path' and 'prediction' columns
+    
+    Returns:
+        Main dataframe with 'adfd_score' column added
+    """
+    if 'file_path' not in df.columns:
+        st.warning("Main dataframe missing 'file_path' column for ADFD merge")
+        return df
+    
+    if 'file_path' not in adfd_df.columns or 'prediction' not in adfd_df.columns:
+        st.warning("ADFD file must have 'file_path' and 'prediction' columns")
+        return df
+    
+    # Select only needed columns and rename
+    adfd_subset = adfd_df[['file_path', 'prediction']].copy()
+    adfd_subset = adfd_subset.rename(columns={'prediction': 'adfd_score'})
+    
+    # Merge on file_path
+    merged_df = df.merge(adfd_subset, on='file_path', how='left')
+    
+    return merged_df
+
+
 # =============================================================================
 # UI Components
 # =============================================================================
@@ -176,6 +238,28 @@ def render_sidebar():
                 key="_file_path",
             )
             st.form_submit_button("Load File", key="_load_local")
+        
+        # ADFD Predictions section
+        st.divider()
+        st.header("ADFD Predictions")
+        
+        st.file_uploader(
+            "Upload ADFD file",
+            type=["parquet", "csv", "pkl"],
+            help="Upload ADFD predictions file with 'file_path' and 'prediction' columns",
+            key="_adfd_uploaded_file",
+        )
+        
+        st.caption("Or load from path:")
+        
+        with st.form("load_adfd_form"):
+            st.text_input(
+                "ADFD file path",
+                value="",
+                help="Path to ADFD predictions file (.parquet, .csv, or .pkl)",
+                key="_adfd_file_path",
+            )
+            st.form_submit_button("Load ADFD File", key="_load_adfd")
 
 
 def render_metrics(df: pd.DataFrame, yield_placeholder):
@@ -233,7 +317,7 @@ def render_column_histogram(col_name: str, col_data: pd.Series) -> float:
         bargap=0.1,
     )
     fig.update_traces(marker_color='#6C8EBF')
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
     
     # Min/Max/Avg stats
     st.caption(
@@ -358,7 +442,7 @@ def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, fa
         yaxis=dict(visible=False),
         bargap=0.1,
     )
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
     
     st.caption("🟩 True (same speaker) · 🟥 False (different speaker)")
     
@@ -504,7 +588,7 @@ def render_worst_results(true_asv: pd.DataFrame, false_asv: pd.DataFrame, df: pd
         
         event_true = st.dataframe(
             worst_true_display,
-            use_container_width=True,
+            width='stretch',
             height=200,
             selection_mode="single-row",
             on_select="rerun",
@@ -532,7 +616,7 @@ def render_worst_results(true_asv: pd.DataFrame, false_asv: pd.DataFrame, df: pd
         
         event_false = st.dataframe(
             worst_false_display,
-            use_container_width=True,
+            width='stretch',
             height=200,
             selection_mode="single-row",
             on_select="rerun",
@@ -598,7 +682,14 @@ def _render_worst_result_audio(df: pd.DataFrame, test_idx, reference_ids: list, 
             ref_row = ref_rows.iloc[0]
             ref_file_path = ref_row['file_path']
             
-            sim_str = f" (sim={float(ref_similarities[i]):.3f})" if i < len(ref_similarities) else ""
+            if i < len(ref_similarities):
+                sim_val = ref_similarities[i]
+                # Handle numpy arrays by extracting the scalar value
+                if hasattr(sim_val, 'item'):
+                    sim_val = sim_val.item()
+                sim_str = f" (sim={float(sim_val):.3f})"
+            else:
+                sim_str = ""
             st.caption(f"`{ref_id}`{sim_str}")
             try:
                 ref_audio = prepare_audio_data(ref_file_path)
@@ -628,7 +719,7 @@ def render_data_preview(df: pd.DataFrame, display_cols: list[str], numeric_cols:
         styled_df = preview_df.style.apply(highlight_rejected, axis=1)
         st.dataframe(
             styled_df,
-            use_container_width=True,
+            width='stretch',
             selection_mode="single-row",
             on_select="rerun",
             key="data_preview_table"
@@ -636,7 +727,7 @@ def render_data_preview(df: pd.DataFrame, display_cols: list[str], numeric_cols:
     else:
         st.dataframe(
             preview_df,
-            use_container_width=True,
+            width='stretch',
             selection_mode="single-row",
             on_select="rerun",
             key="data_preview_table"
@@ -763,7 +854,7 @@ def render_audio_player(df: pd.DataFrame):
         st.info("👆 Select row in the table to listen to the audio")
         return
     
-    max_rows = min(100, len(df))
+    max_rows = len(df)
     row_idx = min(row_idx, max_rows - 1)
     row = df.iloc[row_idx]
     file_path = row['file_path']
@@ -788,7 +879,7 @@ def render_audio_player(df: pd.DataFrame):
         audio_data["sample_rate"],
         audio_data["vad_mask"]
     )
-    st.plotly_chart(waveform_fig, use_container_width=True, config={'displayModeBar': False})
+    st.plotly_chart(waveform_fig, width='stretch', config={'displayModeBar': False})
     
     if has_vad_mask:
         st.caption("🟩 Green regions = VAD mask (speech detected)")
@@ -822,6 +913,11 @@ def main():
         st.info("👈 Upload a file or load a local file to get started")
         return
     
+    # Load and merge ADFD predictions if available
+    adfd_df = load_adfd_predictions()
+    if adfd_df is not None:
+        df = merge_adfd_predictions(df, adfd_df)
+    
     # Determine which columns to display
     display_cols = [c for c in DISPLAY_COLUMNS if c in df.columns]
     numeric_cols = [c for c in display_cols if df[c].dtype in ['float64', 'float32']]
@@ -840,11 +936,12 @@ def main():
         filtered_df = df
     
     # Render metrics with placeholders
-    metrics_cols = st.columns(3)
+    metrics_cols = st.columns(4)
     with metrics_cols[0]:
         st.metric("Rows", f"{len(filtered_df):,} / {len(df)}")
     asv_placeholder = metrics_cols[1].empty()
     yield_placeholder = metrics_cols[2].empty()
+    adfd_placeholder = metrics_cols[3].empty()
     
     st.divider()
     
@@ -863,6 +960,27 @@ def main():
     if numeric_cols:
         thresholds = render_threshold_analysis(df, numeric_cols, yield_placeholder)
         st.divider()
+    
+    # Calculate and display ADFD negatives (rows below adfd threshold among quality-passing rows)
+    if 'adfd_score' in df.columns and thresholds:
+        # Get rows that pass quality thresholds (excluding adfd_score from quality check)
+        quality_cols = [c for c in numeric_cols if c != 'adfd_score']
+        if quality_cols:
+            quality_passing_mask = calculate_passing_mask(df, quality_cols, thresholds)
+            quality_passing_df = df[quality_passing_mask]
+        else:
+            quality_passing_df = df
+        
+        # Count how many have adfd_score below threshold
+        adfd_threshold = thresholds.get('adfd_score', DEFAULT_THRESHOLDS.get('adfd_score', 0.5))
+        adfd_negatives = (quality_passing_df['adfd_score'] < adfd_threshold).sum()
+        total_quality_passing = len(quality_passing_df)
+        adfd_neg_pct = (adfd_negatives / total_quality_passing * 100) if total_quality_passing > 0 else 0
+        
+        adfd_placeholder.metric(
+            "ADFD Negatives",
+            f"{adfd_negatives}/{total_quality_passing} ({adfd_neg_pct:.1f}%)"
+        )
     
     # Audio player
     render_audio_player(df)
