@@ -393,7 +393,165 @@ def get_asv_results(df_hash: str, df: pd.DataFrame, method: str, max_samples: in
     Note: df_hash is used for cache invalidation; the DataFrame itself is not hashed
     (hash_funcs returns None) to avoid issues with numpy array columns.
     """
-    return compute_asv(df, method=method, max_samples=max_samples)
+    use_advanced = method == "advanced"
+    return compute_asv(df, method=method, max_samples=max_samples, use_advanced=use_advanced)
+
+
+def render_confidence_vs_score_scatter(
+    model_name: str,
+    true_asv: pd.DataFrame,
+    false_asv: pd.DataFrame,
+    threshold: float
+):
+    """Render a scatter plot of confidence (x) vs score (y) for true and false matches."""
+    confidence_col = f"{model_name}_confidence"
+    
+    # Check if confidence column exists
+    if confidence_col not in true_asv.columns:
+        return
+    
+    # Get data, filtering out None/NaN confidence values
+    true_scores = true_asv[model_name].dropna()
+    true_conf = true_asv[confidence_col].dropna()
+    false_scores = false_asv[model_name].dropna()
+    false_conf = false_asv[confidence_col].dropna()
+    
+    # Align indices (only keep rows where both score and confidence exist)
+    true_valid = true_scores.index.intersection(true_conf.index)
+    false_valid = false_scores.index.intersection(false_conf.index)
+    
+    # Get aligned data arrays
+    true_x = true_conf.loc[true_valid].values
+    true_y = true_scores.loc[true_valid].values
+    false_x = false_conf.loc[false_valid].values
+    false_y = false_scores.loc[false_valid].values
+    
+    # Compute axis limits with margin
+    all_x = np.concatenate([true_x, false_x]) if len(true_x) > 0 or len(false_x) > 0 else np.array([0, 1])
+    all_y = np.concatenate([true_y, false_y]) if len(true_y) > 0 or len(false_y) > 0 else np.array([0, 1])
+    
+    x_min, x_max = all_x.min(), all_x.max()
+    y_min, y_max = all_y.min(), all_y.max()
+    
+    # Include threshold in y range
+    y_min = min(y_min, threshold)
+    y_max = max(y_max, threshold)
+    
+    # Add 5% margin
+    x_margin = (x_max - x_min) * 0.05 if x_max > x_min else 0.05
+    y_margin = (y_max - y_min) * 0.05 if y_max > y_min else 0.05
+    
+    x_range = [max(0, x_min - x_margin), min(1, x_max + x_margin)]
+    y_range = [max(0, y_min - y_margin), min(1, y_max + y_margin)]
+    
+    fig = go.Figure()
+    
+    # True matches (green)
+    fig.add_trace(go.Scatter(
+        x=true_x,
+        y=true_y,
+        mode='markers',
+        name='True (same speaker)',
+        marker=dict(
+            color='rgba(100, 200, 100, 0.6)',
+            size=6,
+        ),
+    ))
+    
+    # False matches (red)
+    fig.add_trace(go.Scatter(
+        x=false_x,
+        y=false_y,
+        mode='markers',
+        name='False (different speaker)',
+        marker=dict(
+            color='rgba(200, 100, 100, 0.6)',
+            size=6,
+        ),
+    ))
+    
+    # Trendline for true matches (green)
+    slope_true = None
+    if len(true_x) >= 2:
+        z_true = np.polyfit(true_x, true_y, 1)
+        slope_true = z_true[0]
+        p_true = np.poly1d(z_true)
+        x_line = np.array(x_range)
+        fig.add_trace(go.Scatter(
+            x=x_line,
+            y=p_true(x_line),
+            mode='lines',
+            name='True trendline',
+            line=dict(color='rgba(100, 200, 100, 1)', width=2, dash='dash'),
+            showlegend=False,
+        ))
+    
+    # Trendline for false matches (red)
+    slope_false = None
+    if len(false_x) >= 2:
+        z_false = np.polyfit(false_x, false_y, 1)
+        slope_false = z_false[0]
+        p_false = np.poly1d(z_false)
+        x_line = np.array(x_range)
+        fig.add_trace(go.Scatter(
+            x=x_line,
+            y=p_false(x_line),
+            mode='lines',
+            name='False trendline',
+            line=dict(color='rgba(200, 100, 100, 1)', width=2, dash='dash'),
+            showlegend=False,
+        ))
+    
+    # Threshold horizontal line
+    fig.add_hline(
+        y=threshold,
+        line_color="red",
+        line_width=2,
+        line_dash="solid",
+        annotation_text=f"threshold={threshold:.2f}",
+        annotation_position="top right",
+    )
+    
+    fig.update_layout(
+        height=300,
+        margin=dict(l=0, r=0, t=30, b=0),
+        xaxis=dict(title="Confidence", range=x_range),
+        yaxis=dict(title="Score", range=y_range),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        ),
+    )
+    
+    st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
+    
+    # Calculate correlation between confidence and accuracy
+    # True matches: correct if score >= threshold
+    # False matches: correct if score < threshold
+    true_correct = (true_y >= threshold).astype(int)
+    false_correct = (false_y < threshold).astype(int)
+    
+    # Combine all confidence and correctness values
+    all_confidence = np.concatenate([true_x, false_x])
+    all_correct = np.concatenate([true_correct, false_correct])
+    
+    # Calculate Pearson correlation
+    metrics_parts = []
+    if len(all_confidence) >= 2 and np.std(all_confidence) > 0 and np.std(all_correct) > 0:
+        correlation = np.corrcoef(all_confidence, all_correct)[0, 1]
+        metrics_parts.append(f"Corr: **{correlation:.3f}**")
+    
+    # Calculate slope difference (true slope - false slope)
+    # Positive difference means true scores increase faster with confidence than false scores
+    if slope_true is not None and slope_false is not None:
+        slope_diff = slope_true - slope_false
+        metrics_parts.append(f"Slope Δ: **{slope_diff:.3f}**")
+    
+    if metrics_parts:
+        st.caption(" · ".join(metrics_parts))
 
 
 def render_asv_model_histogram(model_name: str, true_similarities: pd.Series, false_similarities: pd.Series) -> float:
@@ -495,7 +653,7 @@ def render_speaker_verification(df: pd.DataFrame, asv_placeholder=None):
     with col2:
         method = st.selectbox(
             "Method",
-            options=["mean", "min", "max", "median"],
+            options=["advanced", "mean", "min", "max", "median"],
             index=0,
             key="asv_method"
         )
@@ -509,14 +667,29 @@ def render_speaker_verification(df: pd.DataFrame, asv_placeholder=None):
         st.warning("No ASV results computed")
         return None, None
     
-    # Display histograms for each model (exclude metadata columns, combined_models first)
+    # Display histograms for each model (exclude metadata and auxiliary columns, combined_models first)
     metadata_cols = ['reference_session_ids', 'reference_similarities']
-    model_names = [c for c in true_asv.columns if c not in metadata_cols]
+    # Exclude confidence and cohesion columns from histogram display (they're auxiliary metrics)
+    model_names = [c for c in true_asv.columns 
+                   if c not in metadata_cols 
+                   and not c.endswith('_confidence') 
+                   and not c.endswith('_cohesion')]
     if 'combined_models' in model_names:
         model_names.remove('combined_models')
         model_names.insert(0, 'combined_models')
-    cols = st.columns(len(model_names))
     
+    # Scatter plot for advanced method (confidence vs score)
+    if method == "advanced":
+        st.markdown("**Confidence vs Score**")
+        scatter_cols = st.columns(len(model_names))
+        for i, model_name in enumerate(model_names):
+            with scatter_cols[i]:
+                st.caption(model_name)
+                threshold = st.session_state.get(f"asv_threshold_{model_name}", DEFAULT_ASV_THRESHOLDS.get(model_name, 0.5))
+                render_confidence_vs_score_scatter(model_name, true_asv, false_asv, threshold)
+    
+    # Histograms
+    cols = st.columns(len(model_names))
     for i, model_name in enumerate(model_names):
         with cols[i]:
             render_asv_model_histogram(model_name, true_asv[model_name], false_asv[model_name])
@@ -540,9 +713,12 @@ def render_worst_results(true_asv: pd.DataFrame, false_asv: pd.DataFrame, df: pd
     if true_asv is None or true_asv.empty:
         return
     
-    # Get model names (exclude metadata columns)
+    # Get model names (exclude metadata and auxiliary columns)
     metadata_cols = ['reference_session_ids', 'reference_similarities']
-    model_names = [c for c in true_asv.columns if c not in metadata_cols]
+    model_names = [c for c in true_asv.columns 
+                   if c not in metadata_cols 
+                   and not c.endswith('_confidence') 
+                   and not c.endswith('_cohesion')]
     if 'combined_models' in model_names:
         model_names.remove('combined_models')
         model_names.insert(0, 'combined_models')
