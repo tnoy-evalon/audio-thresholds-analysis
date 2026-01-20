@@ -50,6 +50,13 @@ DISPLAY_COLUMNS = [
     'status_reason'
 ]
 
+# Columns used for quality filtering (affects ASV sample selection)
+# adfd_score is excluded - it's calculated in parallel to ASV, not used as a filter
+QUALITY_FILTER_COLUMNS = [
+    'vad_ratio', 'snr',
+    'squim_STOI', 'squim_PESQ', 'squim_SI-SDR',
+]
+
 
 # =============================================================================
 # Audio Utilities
@@ -1106,15 +1113,18 @@ def main():
     display_cols = [c for c in DISPLAY_COLUMNS if c in df.columns]
     numeric_cols = [c for c in display_cols if df[c].dtype in ['float64', 'float32']]
     
+    # Quality filter columns (subset of numeric_cols used for ASV filtering)
+    quality_filter_cols = [c for c in QUALITY_FILTER_COLUMNS if c in numeric_cols]
+    
     # Get current quality thresholds from session state
     current_thresholds = {}
     for col_name in numeric_cols:
         default_val = DEFAULT_THRESHOLDS.get(col_name, 0.0)
         current_thresholds[col_name] = st.session_state.get(f"threshold_{col_name}", default_val)
     
-    # Filter dataframe based on quality thresholds for ASV
-    if current_thresholds:
-        passing_mask = calculate_passing_mask(df, numeric_cols, current_thresholds)
+    # Filter dataframe based on quality thresholds for ASV (excludes adfd_score)
+    if quality_filter_cols:
+        passing_mask = calculate_passing_mask(df, quality_filter_cols, current_thresholds)
         filtered_df = df[passing_mask]
     else:
         filtered_df = df
@@ -1147,10 +1157,9 @@ def main():
     
     # Calculate and display ADFD negatives (rows below adfd threshold among quality-passing rows)
     if 'adfd_score' in df.columns and thresholds:
-        # Get rows that pass quality thresholds (excluding adfd_score from quality check)
-        quality_cols = [c for c in numeric_cols if c != 'adfd_score']
-        if quality_cols:
-            quality_passing_mask = calculate_passing_mask(df, quality_cols, thresholds)
+        # Get rows that pass quality thresholds (using same filter as ASV)
+        if quality_filter_cols:
+            quality_passing_mask = calculate_passing_mask(df, quality_filter_cols, thresholds)
             quality_passing_df = df[quality_passing_mask]
         else:
             quality_passing_df = df
