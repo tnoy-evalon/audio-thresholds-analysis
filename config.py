@@ -14,7 +14,7 @@ DEFAULT_THRESHOLDS = {
 
 # Default threshold values for ASV models
 DEFAULT_ASV_THRESHOLDS = {
-    'WESpeakerONNX': 0.67,
+    'WESpeakerONNX': 0.72,
     'WavLM': 0.90,
     'Titanet': 0.6,
     'combined_models': 0.65,

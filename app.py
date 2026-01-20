@@ -263,7 +263,7 @@ def render_sidebar():
         with st.form("load_adfd_form"):
             st.text_input(
                 "ADFD file path",
-                value="",
+                value="s3://asv-data/analysis/adfd_predictions.csv",
                 help="Path to ADFD predictions file (.parquet, .csv, or .pkl)",
                 key="_adfd_file_path",
             )
